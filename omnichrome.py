@@ -4,6 +4,9 @@ import numpy as np
 from collections import deque
 from PIL import Image
 
+MASK_COLOR = (255, 255, 255)
+DIST_CUTOFF = (2 * 3)**2
+
 def main():
     parser = argparse.ArgumentParser(description="Fuck up an image")
     parser.add_argument('filename', type=str, help="File to fuck")
@@ -30,61 +33,129 @@ def main():
     else:
         output_filename = args.output_file
 
-    # Load image, write to binary file
+    # Load image
+    print("Loading image %s" % args.filename)
     input_arr = get_image(args.filename)
     height, width = input_arr.shape[:2]
+    input_arr = input_arr*(args.colorsize/256.0)
+    input_arr = input_arr.astype('uint8')
+
+    # Build input_list, maybe with a mask
+    print("Building input list...")
+    input_list = []
+    if args.mask:
+        print("Loading mask %s"%args.mask)
+        mask_arr = get_mask(args.mask)
+        for x,y in np.ndindex(width, height):
+            if mask_arr[x,y]:
+                r,g,b = input_arr[x,y]
+                input_list.append(((x,y),(r,g,b)))
+    else:
+        for x,y in np.ndindex(width, height):
+            r,g,b = input_arr[x,y]
+            input_list.append(((x,y),(r,g,b)))
+
+    output_list = omnichrome(input_list, args.colorsize)
+
+
+    print("Setting up output...")
+    for (x,y), (r,g,b) in output_list:
+        input_arr[x,y] = r,g,b
+
     input_arr = input_arr*(256.0/args.colorsize)
     input_arr = input_arr.astype('uint8')
-    # Maybe load a mask
-    if args.mask:
-        mask_arr = get_image(args.mask)
+    img = Image.fromarray(input_arr)
+    img.save(output_filename)
+    img.show()
 
-    if not args.read:
-        with open("tmp.bin", 'wb') as bin_file:
-            bin_file.write(args.colorsize.to_bytes(1, byteorder='big', signed=False))
-            for x,y in np.ndindex(width, height):
-                out_bytes = bytearray()
-                if(args.mask):
-                    mr, mg, mb = mask_arr[x,y]
-                    if mr==0 and mg==0 and mb==0:
-                        continue
-                r,g,b = input_arr[x,y]
-                out_bytes.extend(x.to_bytes(2, byteorder='big', signed=False))
-                out_bytes.extend(y.to_bytes(2, byteorder='big', signed=False))
-                out_bytes.append(r)
-                out_bytes.append(g)
-                out_bytes.append(b)
-                bin_file.write(out_bytes)
+def omnichrome(input_list, colorsize):
+    print("Setting up colorspace...")
+    # Expects input list as a list of ((x,y),(r,g,b)) tuples
+    colorspace = np.empty([colorsize, colorsize, colorsize, 2], dtype=int)
+    colorspace_added = np.empty([colorsize, colorsize, colorsize], dtype=bool)
+    for r,g,b in np.ndindex(colorsize, colorsize, colorsize):
+        colorspace[r,g,b] = -1, -1
+        colorspace_added[r,g,b] = False
 
-    if not args.read and not args.write:
-        ret = os.system("g++ omnichrome.cpp -o omnichrome")
-        if ret != 0:
-            print("Something went wrong with the c++ code. :(")
-            return
-        ret = os.system("./omnichrome")
-        if ret != 0:
-            print("Something went wrong with the c++ code. :(")
-            return
+    queues = {}
+    for (x,y),(r,g,b) in input_list:
+        try:
+            queues[(r,g,b)].append((x,y))
+        except KeyError:
+            queues[(r,g,b)] = deque([(x,y)])
+            queues[(r,g,b)].append((x,y))
 
-    if not args.write:
-        output_arr = get_image(args.filename).copy()
-        with open("tmp_out.bin", 'rb') as bin_file:
-            # We don't actually care about the colorsize, but read it anyway to setup the offset correctly
-            bin_file.read(1)
-            while True:
-                bytes_in = bin_file.read(7)
-                if not bytes_in:
-                    break
-                x = int.from_bytes(bytes_in[:2], byteorder="big")
-                y = int.from_bytes(bytes_in[2:4], byteorder="big")
-                r = bytes_in[4] * (256/args.colorsize)
-                g = bytes_in[5] * (256/args.colorsize)
-                b = bytes_in[6] * (256/args.colorsize)
-                output_arr[x,y] = r,g,b
+    # Pop one item from each queue (always place one of the coords at their o.g. color)
+    for col, q in queues.items():
+        pt = q.popleft()
+        colorspace[col] = pt
+        colorspace_added[col] = True
 
-            output_image = Image.fromarray(output_arr)
-            output_image.show()
-            output_image.save(output_filename)
+    print("Setting up empty queue...")
+    next_empty = deque()
+    adj = [
+        (1,0,0),
+        (-1,0,0),
+        (0,1,0),
+        (0,-1,0),
+        (0,0,1),
+        (0,0,-1)
+    ]
+    for r,g,b in np.ndindex(colorsize, colorsize, colorsize):
+        # check if this spot is empty
+        if not colorspace_added[r,g,b]:
+            # check adjacent spots
+            for ro,go,bo in adj:
+                try:
+                    if colorspace_added[r+ro, g+go, b+bo]:
+                        next_empty.append((r, g, b))
+                        colorspace_added[(r, g, b)] = True
+                        break
+                except IndexError:
+                    continue
+
+    print("Processing queues...")
+    # Search the keys
+    while len(next_empty):
+        print(len(next_empty))
+        r,g,b = next_empty.popleft()
+
+        # Find nearest available pixel
+        min_dist = float('inf')
+        min_key = None
+        for key in queues:
+
+            kr, kg, kb = key
+            cur_dist = (r-kr)**2 + (g-kg)**2 + (b-kb)**2
+            if cur_dist < min_dist:
+                min_dist = cur_dist
+                min_key = key
+            if min_dist < DIST_CUTOFF:
+                break
+        assert min_key is not None, "Colorsize too small"
+
+        # pop and lock
+        colorspace[r,g,b] = queues[min_key].popleft()
+        if len(queues[min_key]) == 0:
+            del queues[min_key]
+
+        # add new keys to next_empty
+        for ro,go,bo in adj:
+            try:
+                if not colorspace_added[r+ro, g+go, b+bo]:
+                    next_empty.append((r+ro, g+go, b+bo))
+                    colorspace_added[(r+ro, g+go, b+bo)] = True
+            except IndexError:
+                continue
+
+
+    print("Queues processed")
+    output_list = []
+    for r,g,b in np.ndindex(colorsize, colorsize, colorsize):
+        x,y = colorspace[r,g,b]
+        if x != -1:
+            output_list.append(((x,y),(r,g,b))) # needs more parens
+    return output_list
 
 def get_image(filename):
     input_image = Image.open(filename)
@@ -92,13 +163,16 @@ def get_image(filename):
     input_image = np.asarray(input_image)
     return input_image
 
+def get_mask(filename):
+    mask_img = get_image(filename)
+    width, height, _ = mask_img.shape
+    mask_arr = np.empty([width, height], dtype=bool)
+    for x,y in np.ndindex(width, height):
+        if all(mask_img[x, y] == MASK_COLOR):
+            mask_arr[x,y] = True
+        else:
+            mask_arr[x,y] = False
+    return mask_arr
+
 if __name__ == '__main__':
     main()
-    try:
-        os.remove('tmp.bin')
-    except FileNotFoundError:
-        pass
-    try:
-        os.remove('tmp_out.bin')
-    except FileNotFoundError:
-        pass
