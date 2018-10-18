@@ -3,5 +3,6 @@ untouched/*
 tmp.bin
 tmp_out.bin
 omnichrome.idea/*
+.idea/*
 in/*
-out/*
+out/*eval/*
