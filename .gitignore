@@ -2,7 +2,8 @@ finished/*
 untouched/*
 tmp.bin
 tmp_out.bin
-omnichrome.idea/*
+omnichrome
 .idea/*
 in/*
-out/*eval/*
+out/*
+eval/*
