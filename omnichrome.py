@@ -39,24 +39,22 @@ def main():
     height, width = input_arr.shape[:2]
     input_arr = input_arr*(args.colorsize/256.0)
     input_arr = input_arr.astype('uint8')
-
     # Build input_list, maybe with a mask
     print("Building input list...")
     input_list = []
     if args.mask:
         print("Loading mask %s"%args.mask)
         mask_arr = get_mask(args.mask)
-        for x,y in np.ndindex(width, height):
+        for x,y in np.ndindex(height, width):
             if mask_arr[x,y]:
                 r,g,b = input_arr[x,y]
                 input_list.append(((x,y),(r,g,b)))
     else:
-        for x,y in np.ndindex(width, height):
+        for x,y in np.ndindex(height, width):
             r,g,b = input_arr[x,y]
             input_list.append(((x,y),(r,g,b)))
 
     output_list = omnichrome(input_list, args.colorsize)
-
 
     print("Setting up output...")
     for (x,y), (r,g,b) in output_list:
@@ -84,7 +82,7 @@ def omnichrome(input_list, colorsize):
         except KeyError:
             queues[(r,g,b)] = deque([(x,y)])
             queues[(r,g,b)].append((x,y))
-
+    queue_len = 0
     # Pop one item from each queue (always place one of the coords at their o.g. color)
     for col, q in queues.items():
         pt = q.popleft()
@@ -116,15 +114,17 @@ def omnichrome(input_list, colorsize):
 
     print("Processing queues...")
     # Search the keys
+    counter = 0
     while len(next_empty):
-        print(len(next_empty))
+        counter += 1
+        if counter%100 == 0:
+            print(len(next_empty))
         r,g,b = next_empty.popleft()
 
         # Find nearest available pixel
         min_dist = float('inf')
         min_key = None
         for key in queues:
-
             kr, kg, kb = key
             cur_dist = (r-kr)**2 + (g-kg)**2 + (b-kb)**2
             if cur_dist < min_dist:
@@ -132,6 +132,9 @@ def omnichrome(input_list, colorsize):
                 min_key = key
             if min_dist < DIST_CUTOFF:
                 break
+        if min_key == None:
+            break
+
         assert min_key is not None, "Colorsize too small"
 
         # pop and lock
