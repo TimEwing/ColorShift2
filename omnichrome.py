@@ -1,11 +1,11 @@
 import argparse
 import os
 import numpy as np
+import random
 from collections import deque
 from PIL import Image
 
-MASK_COLOR = (255, 255, 255)
-DIST_CUTOFF = (2 * 3)**2
+DIST_CUTOFF = 20
 
 def main():
     parser = argparse.ArgumentParser(description="Fuck up an image")
@@ -14,6 +14,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default=os.getcwd(), help="Where to put the fucked file")
     parser.add_argument('--output_file', type=str, help="Where to put the fucked file, but also the name")
     parser.add_argument('--mask', type=str, help="file to pull mask from")
+    parser.add_argument('--mask_color', type=int, nargs=3, default=[255, 255, 255], help="mask color")
     parser.add_argument('--write', action='store_true', help="Just write to tmp.bin")
     parser.add_argument('--read', action='store_true', help="Just read from tmp.bin")
     args = parser.parse_args()
@@ -36,7 +37,8 @@ def main():
     # Load image
     print("Loading image %s" % args.filename)
     input_arr = get_image(args.filename)
-    height, width = input_arr.shape[:2]
+    width, height = input_arr.shape[:2]
+    print("Dimensions: {} by {}".format(width, height))
     input_arr = input_arr*(args.colorsize/256.0)
     input_arr = input_arr.astype('uint8')
     # Build input_list, maybe with a mask
@@ -44,8 +46,10 @@ def main():
     input_list = []
     if args.mask:
         print("Loading mask %s"%args.mask)
-        mask_arr = get_mask(args.mask)
-        for x,y in np.ndindex(height, width):
+        mask_arr = get_mask(args.mask, args.mask_color)
+        mask_width, mask_height = mask_arr.shape
+        print("Mask Dimensions: {} by {}".format(mask_width, mask_height))
+        for x,y in np.ndindex(width, height):
             if mask_arr[x,y]:
                 r,g,b = input_arr[x,y]
                 input_list.append(((x,y),(r,g,b)))
@@ -53,6 +57,7 @@ def main():
         for x,y in np.ndindex(height, width):
             r,g,b = input_arr[x,y]
             input_list.append(((x,y),(r,g,b)))
+    print("Processing %s colors" % len(input_list))
 
     output_list = omnichrome(input_list, args.colorsize)
 
@@ -113,6 +118,7 @@ def omnichrome(input_list, colorsize):
                     continue
 
     print("Processing queues...")
+    # random.shuffle(next_empty)
     # Search the keys
     counter = 0
     while len(next_empty):
@@ -126,7 +132,7 @@ def omnichrome(input_list, colorsize):
         min_key = None
         for key in queues:
             kr, kg, kb = key
-            cur_dist = (r-kr)**2 + (g-kg)**2 + (b-kb)**2
+            cur_dist = (r-kr) + (g-kg) + (b-kb)
             if cur_dist < min_dist:
                 min_dist = cur_dist
                 min_key = key
@@ -141,6 +147,8 @@ def omnichrome(input_list, colorsize):
         colorspace[r,g,b] = queues[min_key].popleft()
         if len(queues[min_key]) == 0:
             del queues[min_key]
+            if len(queues) == 0:
+                break
 
         # add new keys to next_empty
         for ro,go,bo in adj:
@@ -166,15 +174,11 @@ def get_image(filename):
     input_image = np.asarray(input_image)
     return input_image
 
-def get_mask(filename):
+def get_mask(filename, mask_color):
     mask_img = get_image(filename)
     width, height, _ = mask_img.shape
     mask_arr = np.empty([width, height], dtype=bool)
-    for x,y in np.ndindex(width, height):
-        if all(mask_img[x, y] == MASK_COLOR):
-            mask_arr[x,y] = True
-        else:
-            mask_arr[x,y] = False
+    mask_arr = np.all(mask_img == mask_color, axis=2)
     return mask_arr
 
 if __name__ == '__main__':

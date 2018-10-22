@@ -1,5 +1,9 @@
 finished/*
 untouched/*
+in/*
+out/*
+eval/*
+.idea/*
 tmp.bin
 tmp_out.bin
 omnichrome
